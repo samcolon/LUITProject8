@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Web Tier Stack
+
+Parameters:
+  KeyPairName:
+    Description: Name of an existing EC2 key pair for SSH access to the instances.
+    Type: String
+    Default: AmazonLinux
+  AMIID:
+    Description: The ID of the AMI to be used for the EC2 instances.
+    Type: String
+    Default: ami-01abd1a301eb83ad4
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: '10.0.1.0/24'
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: '10.0.2.0/24'
+      MapPublicIpOnLaunch: true
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for web tier
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: 'tcp'
+          FromPort: 80
+          ToPort: 80
+
+  WebAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      LaunchConfigurationName: !Ref WebLaunchConfiguration
+      MinSize: 2
+      MaxSize: 5
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref WebTargetGroup
+
+  WebLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref AMIID
+      InstanceType: t2.micro
+      SecurityGroups:
+        - !Ref WebSecurityGroup
+      KeyName: !Ref KeyPairName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum upgrade -y
+          # Add any other commands or packages installation here
+
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: WebTargetGroup
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /  # Replace with your health check path
+
+  WebLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the web load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: 'tcp'
+          FromPort: 80
+          ToPort: 80
+
+  WebLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: WebLoadBalancer
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref WebLoadBalancerSecurityGroup
+      Type: application
+      Tags:
+        - Key: Name
+          Value: WebLoadBalancer
+
+  WebListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref WebLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+Outputs:
+  WebAutoScalingGroupOutput:
+    Description: Auto Scaling Group ID for the web tier.
+    Value: !Ref WebAutoScalingGroup
+
+  VPCOutput:
+    Description: ID of the new default VPC.
+    Value: !Ref VPC
+
+  ExportedNatGatewayId:
+    Value: !Ref NatGateway
+    Export:
+      Name: MyExportedNatGatewayId
+
+  ExportedWebSecurityGroup:
+    Value: !Ref WebSecurityGroup
+    Export:
+      Name: MyExportedWebSecurityGroup
+
+  ExportedVPCId:
+    Value: !Ref VPC
+    Export:
+      Name: MyExportedVpcId
+
+  ExportedSubnetId:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: MyExportedSubnetId

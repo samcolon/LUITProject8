@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Data Tier Stack
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: Enter VPC ID
+    Default: vpc-06ca521df27f3cc53
+ 
+  PrivateSubnet3CIDR:
+    Type: String
+    Default: 10.0.5.0/24
+    Description: CIDR block for the third private subnet
+  
+  PrivateSubnet4CIDR:
+    Type: String
+    Default: 10.0.6.0/24
+    Description: CIDR block for the fourth private subnet
+
+  MyExportedAppSecurityGroup:
+      Type: String
+      Default: sg-0cb3e5891a7139453
+      Description: Enter the Web Security Group ID
+
+  MasterUsername:
+    Description: Username for the database master user
+    Type: String
+    MinLength: 1
+    MaxLength: 16
+    Default: admin
+
+  MasterUserPassword:
+    Description: Password for the database master user
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    ConstraintDescription: Password must be at least 8 characters long.
+
+  DBName:
+    Description: Name of the database to be created
+    Type: String
+    MinLength: 1
+    MaxLength: 64
+    Default: MyDatabase
+
+Resources:
+  MySQLDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: MyFreeTierMySQL
+      Engine: MySQL
+      DBInstanceClass: db.t2.micro
+      AllocatedStorage: 20
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterUserPassword
+      DBName: !Ref DBName
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      #DBSecurityGroup: DBSecurityGroup
+      VPCSecurityGroups:
+           - !Ref DBSecurityGroup
+      MultiAZ: false
+      PubliclyAccessible: false
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref MyExportedAppSecurityGroup
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Database Subnet Group for MySQL"
+      SubnetIds:
+        - !Ref PrivateSubnet3
+        - !Ref PrivateSubnet4
+
+
+  PrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: 10.0.5.0/24
+      AvailabilityZone: us-east-1d
+
+  PrivateSubnet4:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: 10.0.6.0/24
+      AvailabilityZone: us-east-1e
+
+  DataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+
+  Subnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet3
+      RouteTableId: !Ref DataRouteTable
+
+  Subnet4RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet4
+      RouteTableId: !Ref DataRouteTable
+
+Outputs:
+  MySQLDBEndpoint:
+    Description: Endpoint URL of the created MySQL database
+    Value: !GetAtt MySQLDB.Endpoint.Address

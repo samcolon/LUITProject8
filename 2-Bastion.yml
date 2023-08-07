@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Bastion Host Stack
+
+Parameters:
+
+  MyIP:
+    Description: Your public IP address for SSH access to the bastion host
+    Type: String
+    Default: 0.0.0.0/0
+    MinLength: 9
+    MaxLength: 18
+    ConstraintDescription: Please provide a valid IP address range (e.g., 203.0.113.0/24)
+
+  VpcId:
+    Type: String
+    Description: Enter VPC ID
+    Default: vpc-06ca521df27f3cc53
+
+  AMIId:
+    Description: ID of the Amazon Machine Image (AMI) for the Bastion Host
+    Type: AWS::EC2::Image::Id
+    Default: ami-0fc682b2a42e57ca2
+
+  KeyPairName:
+    Description: Name of an existing EC2 key pair for SSH access to the instances.
+    Type: String
+    Default: AmazonLinux
+
+  PublicSubnet1:
+    Description: ID of the existing public subnet
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-00da5a33cd357a7b0
+
+Resources:
+  BastionHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Bastion Host Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref MyIP
+
+  BastionHostInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref AMIId
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref BastionHostSecurityGroup
+      KeyName: !Ref KeyPairName
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          # Install AWS CLI for Windows
+          Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "AWSCLIV2.msi"
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i AWSCLIV2.msi /quiet"
+          Remove-Item "AWSCLIV2.msi"
+          </powershell>
+          </p>
+
+Outputs:
+  BastionHostIP:
+    Description: Public IP address of the Bastion Host
+    Value: !GetAtt BastionHostInstance.PublicIp
+
+  ExportedBastionHostSecurityGroup:
+    Value: !Ref BastionHostSecurityGroup
+    Export:
+      Name: MyExportedBastionHostSecurityGroup

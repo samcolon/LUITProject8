@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: App Tier Stack
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: Enter VPC ID
+    Default: vpc-06ca521df27f3cc53
+  
+  KeyPairName:
+    Description: Name of an existing EC2 key pair for SSH access to the instances.
+    Type: String
+    Default: AmazonLinux
+  
+  AMIID:
+    Description: The ID of the AMI to be used for the EC2 instances.
+    Type: String
+    Default: ami-01abd1a301eb83ad4
+  
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+    Description: CIDR block for the first private subnet
+  
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+    Description: CIDR block for the second private subnet
+  
+  MyExportedNATGatewayId:
+     Type: String
+     Default: nat-08db78d0adad9a4e1
+     Description: Enter the NAT Gateway ID
+ 
+  MyExportedWebSecurityGroup:
+      Type: String
+      Default: sg-0129d02a107d4fc51
+      Description: Enter the Web Security Group ID
+
+  MyExportedBastionHostSecurityGroup:
+      Type: String
+      Default: sg-07922113044b45440
+      Description: Enter the Bastion Host Security Group ID
+
+
+Resources: 
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Select [2, !GetAZs '']
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Select [3, !GetAZs '']
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref MyExportedNATGatewayId
+
+  PrivateSubnet1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the application instances
+      VpcId: !Ref VpcId
+
+  AppSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref MyExportedWebSecurityGroup
+      
+  SSHIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !Ref MyExportedBastionHostSecurityGroup
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      LaunchConfigurationName: !Ref AppLaunchConfiguration
+      MinSize: 2
+      MaxSize: 5
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+
+  AppLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref AMIID
+      InstanceType: t2.micro
+      SecurityGroups:
+        - !Ref AppSecurityGroup
+      KeyName: !Ref KeyPairName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum upgrade -y
+          # Add any other commands or packages installation here
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: AppTargetGroup
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /  # Replace with your health check path
+
+  AppLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the App load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: 'tcp'
+          FromPort: 80
+          ToPort: 80
+
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: AppLoadBalancer
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroups:
+        - !Ref AppLoadBalancerSecurityGroup
+      Type: application
+      Tags:
+        - Key: Name
+          Value: AppLoadBalancer
+
+  AppListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Protocol: "HTTP"
+      Port: 80
+      DefaultActions:
+        - Type: "forward"
+          TargetGroupArn: !Ref AppTargetGroup
+          
+Outputs:
+  ExportedAppSecurityGroup:
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: MyExportedAppSecurityGroup
+
+
